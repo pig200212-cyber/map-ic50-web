@@ -37,6 +37,8 @@ class MAP_IC50_Engine:
                 "logp": Descriptors.MolLogP(mol),
                 "fp": AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
             }
+        except: # <-- 補上這兩行，解決第 40 行的錯誤
+            return None
         def predict(self, smiles, purity=0.95, f_apo=1.12):
         # 1. 提取目標分子的特徵
         x_f = self._get_feats(smiles)
