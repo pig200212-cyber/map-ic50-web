@@ -9,10 +9,9 @@ from rdkit.Chem import Descriptors, AllChem, DataStructs
 # --- 核心運算類別 ---
 class MAP_IC50_Engine:
     def __init__(self, target_time=48):
-        # 基準分子：Verbascoside
+        # 基準分子 Verbascoside
         self.v_smiles = "CC1OC(OC2C(OC(OC2OC(=O)C=CC3=CC(O)=C(O)C=C3)CO)C(O)OCCC4=CC=C(O)C(O)=C4)C(O)C(O)C1O"
-        self.v_phi_ref = 1.065
-        self.psi_base = 658.5  # 已校準基準值
+        self.psi_base = 658.5  # 經過校準的基準係數
         self.gamma_a549 = 0.78
         self.tau_t = self._calculate_tau(target_time)
 
@@ -22,6 +21,7 @@ class MAP_IC50_Engine:
 
     def _get_feats(self, smiles):
         try:
+            # 這裡縮排 12 個空格 (等級 3)
             clean_s = smiles.replace("\n", "").replace("\r", "").replace(" ", "").strip()
             mol = Chem.MolFromSmiles(clean_s)
             if not mol:
@@ -39,6 +39,7 @@ class MAP_IC50_Engine:
 
     def predict(self, smiles, purity=0.95, f_apo=1.12):
         try:
+            # 這裡縮排 12 個空格 (等級 3)
             x_f = self._get_feats(smiles)
             v_f = self._get_feats(self.v_smiles)
             
@@ -47,12 +48,13 @@ class MAP_IC50_Engine:
                 
             sim = DataStructs.TanimotoSimilarity(x_f["fp"], v_f["fp"])
             
-            # 🚀 姜黃素與小分子校準邏輯
+            # 🚀 姜黃素專屬校準：當相似度低於 0.3
             if sim < 0.3:
                 dynamic_psi = 22.8 
             else:
                 dynamic_psi = self.psi_base
 
+            # IC50 核心演算法
             denom = (max(0.1, x_f["logp"]) / max(0.1, v_f["logp"]))
             pol_ratio = (x_f["psa"] / v_f["psa"]) / denom
             
@@ -63,39 +65,8 @@ class MAP_IC50_Engine:
             
             return ic50, sim
         except:
+            # 解決 image_287dda.png 報錯：except 必須與 try 對齊
             return None, None
-        # ----------------------------------------------
-
-        # 3. 執行 IC50 核心公式
-        denom = (max(0.1, x_f["logp"]) / max(0.1, v_f["logp"]))
-        pol_ratio = (x_f["psa"] / v_f["psa"]) / denom
-        
-        # 使用動態校準後的 dynamic_psi
-        phi_x = (dynamic_psi / 287.6) * (sim / max(0.01, pol_ratio))
-        eta = 1 + 1.55 * ((purity - 0.30) / 0.70)**0.72
-        
-        ic50 = (self.psi_base * phi_x * self.gamma_a549 * eta) / (self.tau_t * f_apo)
-        
-        return ic50, sim
-        except: return None
-
-    def predict(self, x_smiles, purity=0.95, f_apo=1.12):
-        v_f = self._get_feats(self.v_smiles)
-        x_f = self._get_feats(x_smiles)
-        
-        if v_f is None:
-            st.error("系統錯誤：基準分子解析失敗。")
-            return None, None
-        if x_f is None:
-            return None, None
-            
-        sim = DataStructs.TanimotoSimilarity(x_f["fp"], v_f["fp"])
-        denom = (max(0.1, x_f["logp"]) / max(0.1, v_f["logp"]))
-        pol_ratio = (x_f["psa"] / v_f["psa"]) / denom
-        phi_x = self.v_phi_ref * (sim / max(0.01, pol_ratio))
-        eta = 1 + 1.55 * ((purity - 0.30) / 0.70)**0.72
-        ic50 = (self.psi_base * phi_x * self.gamma_a549 * eta) / (self.tau_t * f_apo)
-        return ic50, sim
 
 # --- 預設簡化化合物資料庫 ---
 COMPOUND_DB = {
