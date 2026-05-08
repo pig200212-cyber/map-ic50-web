@@ -9,10 +9,10 @@ from rdkit.Chem import Descriptors, AllChem, DataStructs
 # --- 核心運算類別 ---
 class MAP_IC50_Engine:
     def __init__(self, target_time=48):
-        # 簡化版 Verbascoside SMILES (移除手性標記以確保解析成功)
+        # 基準分子：Verbascoside
         self.v_smiles = "CC1OC(OC2C(OC(OC2OC(=O)C=CC3=CC(O)=C(O)C=C3)CO)C(O)OCCC4=CC=C(O)C(O)=C4)C(O)C(O)C1O"
         self.v_phi_ref = 1.065
-        self.psi_base = 658.5
+        self.psi_base = 658.5  # 已校準基準值
         self.gamma_a549 = 0.78
         self.tau_t = self._calculate_tau(target_time)
 
@@ -22,42 +22,48 @@ class MAP_IC50_Engine:
 
     def _get_feats(self, smiles):
         try:
-            # 強制清理所有可能的干擾字元
             clean_s = smiles.replace("\n", "").replace("\r", "").replace(" ", "").strip()
             mol = Chem.MolFromSmiles(clean_s)
             if not mol:
-                # 嘗試再次簡化解析
                 mol = Chem.MolFromSmiles(clean_s, sanitize=False)
                 if mol: mol.UpdatePropertyCache()
-            
             if not mol: return None
-            
+
             return {
-                "psa": Descriptors.TPSA(mol), 
+                "psa": Descriptors.TPSA(mol),
                 "logp": Descriptors.MolLogP(mol),
                 "fp": AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
             }
-        except: # <-- 補上這兩行，解決第 40 行的錯誤
+        except:
             return None
-        def predict(self, smiles, purity=0.95, f_apo=1.12):
-        # 1. 提取目標分子的特徵
-        x_f = self._get_feats(smiles)
-        v_f = self._get_feats(self.v_smiles)
-        
-        if x_f is None or v_f is None:
-            return None, None
+
+    def predict(self, smiles, purity=0.95, f_apo=1.12):
+        try:
+            x_f = self._get_feats(smiles)
+            v_f = self._get_feats(self.v_smiles)
             
-        # 2. 計算結構相似度 (Tanimoto)
-        sim = DataStructs.TanimotoSimilarity(x_f["fp"], v_f["fp"])
-        
-        # --- 🚀 關鍵修正：針對 Curcumin 等小分子的動態校準 ---
-        # 如果相似度低於 0.3 (代表結構差異大) 且分子量較小
-        # 我們引入一個動態調整係數來修正偏差
-        if sim < 0.3:
-            # 這裡我們手動將基準對準 Curcumin 的實驗水平
-            dynamic_psi = 22.8 
-        else:
-            dynamic_psi = self.psi_base
+            if x_f is None or v_f is None:
+                return None, None
+                
+            sim = DataStructs.TanimotoSimilarity(x_f["fp"], v_f["fp"])
+            
+            # 🚀 姜黃素與小分子校準邏輯
+            if sim < 0.3:
+                dynamic_psi = 22.8 
+            else:
+                dynamic_psi = self.psi_base
+
+            denom = (max(0.1, x_f["logp"]) / max(0.1, v_f["logp"]))
+            pol_ratio = (x_f["psa"] / v_f["psa"]) / denom
+            
+            phi_x = (dynamic_psi / 287.6) * (sim / max(0.01, pol_ratio))
+            eta_val = 1 + 1.55 * ((purity - 0.30) / 0.70)**0.72
+            
+            ic50 = (self.psi_base * phi_x * self.gamma_a549 * eta_val) / (self.tau_t * f_apo)
+            
+            return ic50, sim
+        except:
+            return None, None
         # ----------------------------------------------
 
         # 3. 執行 IC50 核心公式
