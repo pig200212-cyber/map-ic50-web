@@ -9,8 +9,8 @@ from rdkit.Chem import Descriptors, AllChem, DataStructs
 # --- 核心運算類別 ---
 class MAP_IC50_Engine:
     def __init__(self, target_time=48):
-        # 基準：Verbascoside
-        self.v_smiles = r"C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2OC(=O)/C=C/C3=CC(=C(C=C3)O)O)CO)[C@@H](O)OCCN4=CC=C(C=C4)O)O)O)O"
+        # 簡化版 Verbascoside SMILES (移除手性標記以確保解析成功)
+        self.v_smiles = "CC1OC(OC2C(OC(OC2OC(=O)C=CC3=CC(O)=C(O)C=C3)CO)C(O)OCCC4=CC=C(O)C(O)=C4)C(O)C(O)C1O"
         self.v_phi_ref = 1.065
         self.psi_base = 287.6
         self.gamma_a549 = 0.78
@@ -22,10 +22,16 @@ class MAP_IC50_Engine:
 
     def _get_feats(self, smiles):
         try:
-            # 清理字串中可能的隱形字元
-            clean_s = "".join(smiles.split()).strip()
+            # 強制清理所有可能的干擾字元
+            clean_s = smiles.replace("\n", "").replace("\r", "").replace(" ", "").strip()
             mol = Chem.MolFromSmiles(clean_s)
+            if not mol:
+                # 嘗試再次簡化解析
+                mol = Chem.MolFromSmiles(clean_s, sanitize=False)
+                if mol: mol.UpdatePropertyCache()
+            
             if not mol: return None
+            
             return {
                 "psa": Descriptors.TPSA(mol), 
                 "logp": Descriptors.MolLogP(mol),
@@ -36,7 +42,13 @@ class MAP_IC50_Engine:
     def predict(self, x_smiles, purity=0.95, f_apo=1.12):
         v_f = self._get_feats(self.v_smiles)
         x_f = self._get_feats(x_smiles)
-        if v_f is None or x_f is None: return None, None
+        
+        if v_f is None:
+            st.error("系統錯誤：基準分子解析失敗。")
+            return None, None
+        if x_f is None:
+            return None, None
+            
         sim = DataStructs.TanimotoSimilarity(x_f["fp"], v_f["fp"])
         denom = (max(0.1, x_f["logp"]) / max(0.1, v_f["logp"]))
         pol_ratio = (x_f["psa"] / v_f["psa"]) / denom
@@ -45,11 +57,11 @@ class MAP_IC50_Engine:
         ic50 = (self.psi_base * phi_x * self.gamma_a549 * eta) / (self.tau_t * f_apo)
         return ic50, sim
 
-# --- 預設化合物資料庫 ---
+# --- 預設簡化化合物資料庫 ---
 COMPOUND_DB = {
-    "Verbascoside (Acteoside)": "C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2OC(=O)/C=C/C3=CC(=C(C=C3)O)O)CO)[C@@H](O)OCCN4=CC=C(C=C4)O)O)O)O",
-    "Isoverbascoside": "C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2O)CO[C@H]3[C@@H]([C@H]([C@@H]([C@H](O3)OCCN4=CC=C(C=C4)O)O)O)OC(=O)/C=C/C5=CC=C(C=C5)O)O)O)O)O",
-    "Echinacoside": "C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2O[C@H]3[C@@H]([C@H]([C@@H]([C@H](O3)CO)O)O)O)CO[C@H]4[C@@H]([C@H]([C@@H]([C@H](O4)OCCN5=CC=C(C=C5)O)O)O)OC(=O)/C=C/C6=CC=C(C=C6)O)O)O)O)O"
+    "Verbascoside (Acteoside)": "CC1OC(OC2C(OC(OC2OC(=O)C=CC3=CC(O)=C(O)C=C3)CO)C(O)OCCC4=CC=C(O)C(O)=C4)C(O)C(O)C1O",
+    "Isoverbascoside": "CC1OC(OC2C(OC(OC2O)COC3OC(C(O)C(OC(=O)C=CC4=CC=C(O)C=C4)C3O)OCCC5=CC=C(O)C(O)=C5)C(O)O)C(O)C(O)C1O",
+    "Echinacoside": "CC1OC(OC2C(OC(OC2OC3OC(CO)C(O)C(O)C3O)COC4OC(C(O)C(OC(=O)C=CC5=CC=C(O)C=C5)C4O)OCCC6=CC=C(O)C(O)=C6)C(O)O)C(O)C(O)C1O"
 }
 
 # --- Streamlit 介面 ---
@@ -74,7 +86,7 @@ with tab1:
             cpd_name = st.selectbox("選擇化合物：", list(COMPOUND_DB.keys()))
             target_smiles = COMPOUND_DB[cpd_name]
         else:
-            target_smiles = st.text_area("在此貼上 SMILES：", help="請確保字串完整且無空格")
+            target_smiles = st.text_area("在此貼上 SMILES：")
             
         f_apo_input = st.number_input("凋亡誘導因子 (f_apo)", value=1.12)
         run_btn = st.button("🚀 開始執行 AI 預測")
@@ -84,13 +96,12 @@ with tab1:
             with st.spinner("AI 運算中..."):
                 ic50, sim = engine.predict(target_smiles, purity=purity_exp, f_apo=f_apo_input)
                 if ic50 is None:
-                    st.error("❌ 結構解析失敗。請檢查 SMILES 是否包含非法字元。")
+                    st.error("❌ 結構解析失敗。建議嘗試選取資料庫內的已知化合物。")
                 else:
                     st.success("✅ 計算完成")
                     st.metric("預測 IC50", f"{ic50:.2f} μg/mL")
-                    st.write(f"**結構相似度:** {sim:.4f}")
+                    st.write(f"**結構相似度 (Tanimoto):** {sim:.4f}")
                     
-                    # 畫圖
                     concs = np.logspace(0, 4, 100)
                     surv = 100 / (1 + (concs / ic50)**1.2)
                     fig, ax = plt.subplots()
@@ -98,5 +109,4 @@ with tab1:
                     ax.axhline(50, color='red', linestyle='--', alpha=0.5)
                     ax.set_xlabel("Concentration (µg/mL)")
                     ax.set_ylabel("Cell Viability (%)")
-                    ax.grid(True, which="both", ls="-", alpha=0.2)
                     st.pyplot(fig)
