@@ -12,7 +12,7 @@ class MAP_IC50_Engine:
         # 簡化版 Verbascoside SMILES (移除手性標記以確保解析成功)
         self.v_smiles = "CC1OC(OC2C(OC(OC2OC(=O)C=CC3=CC(O)=C(O)C=C3)CO)C(O)OCCC4=CC=C(O)C(O)=C4)C(O)C(O)C1O"
         self.v_phi_ref = 1.065
-        self.psi_base = 287.6
+        self.psi_base = 658.5
         self.gamma_a549 = 0.78
         self.tau_t = self._calculate_tau(target_time)
 
