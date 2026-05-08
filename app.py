@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import pubchempy as pcp
 import math
 from rdkit import Chem
 from rdkit.Chem import Descriptors, AllChem, DataStructs
@@ -10,8 +9,8 @@ from rdkit.Chem import Descriptors, AllChem, DataStructs
 # --- 核心運算類別 ---
 class MAP_IC50_Engine:
     def __init__(self, target_time=48):
-        # 基準化合物：Verbascoside (5281800)
-        self.v_smiles = r"O[C@@H]1[C@H](OC(=O)/C=C/c2ccc(O)c(O)c2)[C@@H](CO)O[C@H](Oc2cc(ccc2O)/C=C/c3ccc(O)c(O)c2)[C@H]1O"
+        # 基準：Verbascoside
+        self.v_smiles = r"C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2OC(=O)/C=C/C3=CC(=C(C=C3)O)O)CO)[C@@H](O)OCCN4=CC=C(C=C4)O)O)O)O"
         self.v_phi_ref = 1.065
         self.psi_base = 287.6
         self.gamma_a549 = 0.78
@@ -22,10 +21,11 @@ class MAP_IC50_Engine:
         return 1.576 if t == 48 else (1 + 0.802 * ln_ratio + 1.394 * (ln_ratio**2))
 
     def _get_feats(self, smiles):
-        if not smiles: return None
-        mol = Chem.MolFromSmiles(smiles)
-        if not mol: return None
         try:
+            # 清理字串中可能的隱形字元
+            clean_s = "".join(smiles.split()).strip()
+            mol = Chem.MolFromSmiles(clean_s)
+            if not mol: return None
             return {
                 "psa": Descriptors.TPSA(mol), 
                 "logp": Descriptors.MolLogP(mol),
@@ -45,6 +45,13 @@ class MAP_IC50_Engine:
         ic50 = (self.psi_base * phi_x * self.gamma_a549 * eta) / (self.tau_t * f_apo)
         return ic50, sim
 
+# --- 預設化合物資料庫 ---
+COMPOUND_DB = {
+    "Verbascoside (Acteoside)": "C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2OC(=O)/C=C/C3=CC(=C(C=C3)O)O)CO)[C@@H](O)OCCN4=CC=C(C=C4)O)O)O)O",
+    "Isoverbascoside": "C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2O)CO[C@H]3[C@@H]([C@H]([C@@H]([C@H](O3)OCCN4=CC=C(C=C4)O)O)O)OC(=O)/C=C/C5=CC=C(C=C5)O)O)O)O)O",
+    "Echinacoside": "C[C@H]1[C@@H]([C@H]([C@H]([C@H](O1)O[C@@H]2[C@H](O[C@H](O[C@H]2O[C@H]3[C@@H]([C@H]([C@@H]([C@H](O3)CO)O)O)O)CO[C@H]4[C@@H]([C@H]([C@@H]([C@H](O4)OCCN5=CC=C(C=C5)O)O)O)OC(=O)/C=C/C6=CC=C(C=C6)O)O)O)O)O"
+}
+
 # --- Streamlit 介面 ---
 st.set_page_config(page_title="MAP-IC50 AI Platform", layout="wide")
 st.title("🧪 MAP-IC50 藥物活性預測與統計平台")
@@ -59,40 +66,37 @@ tab1, tab2 = st.tabs(["💊 藥物活性預測", "📊 ANOVA 統計檢定"])
 with tab1:
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.subheader("輸入方式選擇")
-        input_method = st.radio("選擇數據來源：", ["PubChem CID 自動抓取", "手動貼上 SMILES 結構"])
+        st.subheader("選擇預測對象")
+        mode = st.radio("模式：", ["從資料庫選擇", "手動輸入 SMILES"])
         
         target_smiles = ""
-        if input_method == "PubChem CID 自動抓取":
-            cid_input = st.text_input("輸入 PubChem CID", "5281800")
-            if st.button("從網路檢索並預測"):
-                try:
-                    comp = pcp.Compound.from_cid(cid_input)
-                    target_smiles = getattr(comp, 'isomeric_smiles', "")
-                except: st.error("無法連上 PubChem，請改用手動貼上 SMILES。")
+        if mode == "從資料庫選擇":
+            cpd_name = st.selectbox("選擇化合物：", list(COMPOUND_DB.keys()))
+            target_smiles = COMPOUND_DB[cpd_name]
         else:
-            target_smiles = st.text_area("在此貼上化合物的 SMILES", "")
-            predict_btn = st.button("執行預測")
-
+            target_smiles = st.text_area("在此貼上 SMILES：", help="請確保字串完整且無空格")
+            
         f_apo_input = st.number_input("凋亡誘導因子 (f_apo)", value=1.12)
+        run_btn = st.button("🚀 開始執行 AI 預測")
 
     with col2:
-        # 當 target_smiles 有值時觸發計算
-        if target_smiles:
-            with st.spinner("計算中..."):
+        if run_btn and target_smiles:
+            with st.spinner("AI 運算中..."):
                 ic50, sim = engine.predict(target_smiles, purity=purity_exp, f_apo=f_apo_input)
                 if ic50 is None:
-                    st.error("結構解析失敗，請確認 SMILES 格式是否正確。")
+                    st.error("❌ 結構解析失敗。請檢查 SMILES 是否包含非法字元。")
                 else:
-                    st.success("計算完成！")
+                    st.success("✅ 計算完成")
                     st.metric("預測 IC50", f"{ic50:.2f} μg/mL")
-                    st.write(f"**相似度 (Tanimoto):** {sim:.4f}")
+                    st.write(f"**結構相似度:** {sim:.4f}")
                     
+                    # 畫圖
                     concs = np.logspace(0, 4, 100)
                     surv = 100 / (1 + (concs / ic50)**1.2)
                     fig, ax = plt.subplots()
-                    ax.semilogx(concs, surv, label="Predicted Curve")
-                    ax.axhline(50, color='r', linestyle='--')
-                    ax.set_ylabel("Viability (%)")
-                    ax.set_xlabel("Conc (ug/mL)")
+                    ax.semilogx(concs, surv, label="Predicted", color='#1f77b4', linewidth=2)
+                    ax.axhline(50, color='red', linestyle='--', alpha=0.5)
+                    ax.set_xlabel("Concentration (µg/mL)")
+                    ax.set_ylabel("Cell Viability (%)")
+                    ax.grid(True, which="both", ls="-", alpha=0.2)
                     st.pyplot(fig)
