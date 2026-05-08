@@ -1,0 +1,8 @@
+streamlit
+rdkit
+pandas
+numpy
+scipy
+statsmodels
+matplotlib
+pubchempy
